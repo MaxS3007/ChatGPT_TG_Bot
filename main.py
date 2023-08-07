@@ -31,7 +31,7 @@ MAX_TOKEN = 3500
 lock = threading.Lock()
 
 # Временной интервал для ограничения скорости
-RATE_LIMIT_INTERVAL = 30 * 60  # 30 min
+RATE_LIMIT_INTERVAL = 5 * 60  #  min
 
 # Время последнего запроса
 last_request_time = time.time()
@@ -106,7 +106,7 @@ def start(message):
 
 
 # Обработчик пользовательских сообщений
-@bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text)
+@bot.message_handler(func=lambda message: message.text is not None and message.text[0] != '/')
 @restricted_access
 def echo_message(message):
     try:
@@ -117,58 +117,63 @@ def echo_message(message):
         # Проверьте, не отправил ли пользователь слишком много сообщений за короткий промежуток времени
         global last_request_time
 
-        if time.time() - last_request_time < RATE_LIMIT_INTERVAL:
-            # Извлеките последний сохраненный контекст запроса для данного пользователя из горячего кэша
-            prev_text, prev_time = hot_cache.get(user_id, (None, 0))
 
-            # Если запись находится в кэше и время отправки запроса не превышает 5 минут, используйте ее в качестве
-            # предыдущего контекста
-            if prev_text and time.time() - prev_time < HOT_CACHE_DURATION:
-                print("Берем данные из кэша ======================")
-                prompt = prev_text + '\n' + text
+        # Извлеките последний сохраненный контекст запроса для данного пользователя из горячего кэша
+        prev_text, prev_time = hot_cache.get(user_id, (None, 0))
+
+        # Если запись находится в кэше и время отправки запроса не превышает 5 минут, используйте ее в качестве
+        # предыдущего контекста
+        if prev_text and time.time() - prev_time < HOT_CACHE_DURATION:
+            print("Берем данные из кэша ======================")
+            prompt = prev_text + '\n' + text
+            print(prompt)
+            print("===========================================")
+
+        else:
+            # В противном случае запросите базу данных, чтобы получить контекст последнего запроса для этого пользователя
+            with get_conn() as conn:
+                c = conn.cursor()
+                c.execute("SELECT text FROM context WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
+                row = c.fetchone()
+                prompt = row[0] + '\n' + text if row is not None else text
+
+                # Обновление кэша
+                hot_cache[user_id] = (prompt, time.time())
+                print("Берем данные из БАЗЫ ДАННЫХ <>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>")
                 print(prompt)
-                print("===========================================")
-
-            else:
-                # В противном случае запросите базу данных, чтобы получить контекст последнего запроса для этого пользователя
-                with get_conn() as conn:
-                    c = conn.cursor()
-                    c.execute("SELECT text FROM context WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
-                    row = c.fetchone()
-                    prompt = row[0] + '\n' + text if row is not None else text
-
-                    # Обновление кэша
-                    hot_cache[user_id] = (prompt, time.time())
-                    print("Берем данные из БАЗЫ ДАННЫХ <>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>==<>")
-                    print(prompt)
-                    print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+                print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
 
 
         bot.reply_to(message, "Запрос принят к обработке, пожалуйста, подождите.")
 
-
+        response = {}
+        if prompt:
         # Генерация ответа с помощью OpenAI
-        response = response_to_gpt(prompt)
+            response = response_to_gpt(prompt)
 
-        # Разделение ответа на несколько сообщений, если его длина превышает максимальную, разрешенную Telegram API
-        print()
-        print()
-        print("============ ОТВЕТ ИИ =====================================================================================================")
-        response_text = ""
-        for choice in response['choices']:
-            print(choice['text'])
-            print("=================================")
-            response_text += choice['text'] + "\n=================================\n"
-        print("============ ОТВЕТ ИИ =====================================================================================================")
-        print()
-        print()
+        response_text = "Запрос не обработан. Повторите через 1 минуту"
+        u = False
+        print(response)
+        if response:
+            # Разделение ответа на несколько сообщений, если его длина превышает максимальную, разрешенную Telegram API
+            print()
+            print()
+            print("============ ОТВЕТ ИИ =====================================================================================================")
+            response_text = ""
+            u = True
+            for choice in response['choices']:
+                print(choice['text'])
+                print("=================================")
+                response_text += choice['text'] + "\n=================================\n"
+            print("============ ОТВЕТ ИИ =====================================================================================================")
+            print()
+            print()
 
         #response_text = response.choices[0].text
 
         while len(response_text) > 0:
             response_chunk = response_text[:MAX_MESSAGE_LENGTH]
             response_text = response_text[MAX_MESSAGE_LENGTH:]
-
             # Отвеччем пользователю текущим фрагментом ответа
             bot.reply_to(message, response_chunk)
 
